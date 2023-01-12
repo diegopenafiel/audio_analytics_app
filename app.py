@@ -3,8 +3,6 @@ import sys, os
 import streamlit as st
 import pandas as pd
 import numpy as np
-import altair as alt
-import requests
 import time 
 import json
 import logging
@@ -12,7 +10,7 @@ from src.sound import sound
 from settings import (
     DURATION, DEFAULT_SAMPLE_RATE, MAX_INPUT_CHANNELS,
     WAVE_OUTPUT_FILE, INPUT_DEVICE, CHUNK_SIZE,
-    RECORDING_DIR, IMAGE_DIR
+    RECORDING_DIR, SENTIMENT_MODEL_URL
 )
 
 import math
@@ -25,6 +23,17 @@ from transformers import (
     WhisperModel
 )
 from typing import Optional, Tuple, Union
+
+SENT_CLASSES = [
+      'neutral', 
+      'calm', 
+      'happy', 
+      'sad', 
+      'angry', 
+      'fearful', 
+      'disgust', 
+      'surprised'
+    ]
 
 class WhisperClassificationHead(torch.nn.Module):
     """Head for classification tasks."""
@@ -112,11 +121,9 @@ class WhisperForSentimentAnalysis(torch.nn.Module):
         logits = self.classification_head(speech_representation)
         return logits
 
-def get_split_audio(processor, file_url, resampling_rate=16000, split_length=15):
+def get_split_audio(processor, file_path, resampling_rate=16000, split_length=15):
     # retrieve audio file and load it
-    response = requests.get(file_url)
-    open("tmp.wav", "wb").write(response.content)
-    data, sr = librosa.load("tmp.wav")
+    data, sr = librosa.load(file_path)
     
     #get audio file in numpy array and sr as original sampling rate
     buffer = split_length * sr
@@ -173,43 +180,29 @@ def transcribe(file_path, model_option):
     return transcript
 
 # Sentiment Analysis
-def sentiment_analysis(file_url, sentiment_model, threshold=0.8, batch_size=8):
+def sentiment_analysis(file_path, sentiment_model_url, emotion_labels, threshold=0.8, batch_size=8):
     # load model and processor
     whisper_model = "openai/whisper-tiny.en"
     
-    emotion_labels = [
-      'neutral', 
-      'calm', 
-      'happy', 
-      'sad', 
-      'angry', 
-      'fearful', 
-      'disgust', 
-      'surprised'
-    ]
     num_classes = len(emotion_labels)
 
     feature_extractor = WhisperFeatureExtractor.from_pretrained(whisper_model)
     model = WhisperForSentimentAnalysis(whisper_model=whisper_model, 
                                         num_classes=num_classes, 
                                         classifier_dropout=0.1)
-    state_dict = torch.hub.load_state_dict_from_url(sentiment_model, map_location=torch.device('cpu'))
+    state_dict = torch.hub.load_state_dict_from_url(sentiment_model_url, map_location=torch.device('cpu'))
     model.load_state_dict(state_dict)
     
-    all_input_features = get_split_audio(feature_extractor, file_url, resampling_rate=16000, split_length=15)
+    all_input_features = get_split_audio(feature_extractor, file_path, resampling_rate=16000, split_length=15)
     all_probabilities = run_sentiment(model, all_input_features, batch_size=8)
 
-    for i in range(len(all_probabilities)):
-        emotion_idx = np.argmax(all_probabilities[i])
-        emotion_pred = emotion_labels[emotion_idx]
-        if all_probabilities[i][emotion_idx] > threshold:
-            st.write("Emotion detected:", str(emotion_pred), 
-                  "with probability", "%d %%" % (all_probabilities[i][emotion_idx] * 100))
+    return all_probabilities
 
 def main():
     #Main Body    
     st.header('Call Centre Audio Analytics')
     st.write('In this application we leverage deep learning models to process and analyse human speech.')
+    st.write(SENT_CLASSES)
 
     if st.button('Record audio'):
         with st.spinner(f'Recording for {DURATION} seconds...'):
@@ -248,8 +241,21 @@ def main():
         threshold = st.slider('Select a confidence threshold:', 0.0, 100.0, 80.0)
 
         if st.button('Run Sentiment Analysis'):
-            st.subheader("Sentiment(s) found:")
-            # sentiment_analysis(file_url, sentiment_model, threshold=float(threshold) / 100.0)
+            try:
+                with st.spinner(f'Analysing audio...'):
+                    all_probabilities = sentiment_analysis(file_path=WAVE_OUTPUT_FILE, 
+                                                           sentiment_model_url=SENTIMENT_MODEL_URL, 
+                                                           emotion_labels=SENT_CLASSES,
+                                                           threshold=float(threshold) / 100.0)
+                st.subheader("Sentiment(s) found:")
+                for i in range(len(all_probabilities)):
+                    emotion_idx = np.argmax(all_probabilities[i])
+                    emotion_pred = SENT_CLASSES[emotion_idx]
+                    if all_probabilities[i][emotion_idx] > threshold:
+                        st.write("Emotion detected:", str(emotion_pred), 
+                              "with probability", "%d %%" % (all_probabilities[i][emotion_idx] * 100))
+            except:
+                st.error("No audio has been recorded.")
 
 if __name__ == '__main__':
     main()
