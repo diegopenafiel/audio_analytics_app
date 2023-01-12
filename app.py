@@ -202,7 +202,6 @@ def main():
     #Main Body    
     st.header('Call Centre Audio Analytics')
     st.write('In this application we leverage deep learning models to process and analyse human speech.')
-    st.write(SENT_CLASSES)
 
     if st.button('Record audio'):
         with st.spinner(f'Recording for {DURATION} seconds...'):
