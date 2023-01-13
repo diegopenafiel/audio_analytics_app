@@ -245,10 +245,10 @@ def main():
     with col1:
         gen_models = [
                 "tiny",
-                "base",
-                "small",
-                "medium",
-                "large",
+                # "base",
+                # "small",
+                # "medium",
+                # "large",
             ]
         model_option = st.selectbox(
             'Select a transcription engine:',
