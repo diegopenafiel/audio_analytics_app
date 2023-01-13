@@ -1,329 +1,116 @@
-import sys, os
+
+import websockets
+import asyncio
+import base64
+import json
+import pyaudio
+import requests
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 import streamlit as st
-from streamlit_webrtc import WebRtcMode, webrtc_streamer
-import pandas as pd
-import numpy as np
-import time 
-import json
-import logging
-# from src.sound import sound
-import pyaudio, wave
-from settings import (
-    DURATION, DEFAULT_SAMPLE_RATE, MAX_INPUT_CHANNELS,
-    WAVE_OUTPUT_FILE, INPUT_DEVICE, CHUNK_SIZE,
-    RECORDING_DIR, SENTIMENT_MODEL_URL
+
+if 'run' not in st.session_state:
+    st.session_state['run'] = False
+
+Frames_per_buffer = 3200
+Format = pyaudio.paInt16
+Channels = 1
+Rate = 16000
+p = pyaudio.PyAudio()
+
+# starts recording
+stream = p.open(
+    format=Format,
+    channels=Channels,
+    rate=Rate,
+    input=True,
+    frames_per_buffer=Frames_per_buffer
 )
 
-import math
-import librosa
-import torch
-import whisper
-from transformers import (
-    WhisperConfig,
-    WhisperFeatureExtractor, 
-    WhisperModel
-)
-from typing import Optional, Tuple, Union
+webrtc_ctx = webrtc_streamer(
+        key="speech-to-text",
+        mode=WebRtcMode.SENDONLY,
+        audio_receiver_size=1024,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        media_stream_constraints={"video": False, "audio": True},
+    )
 
-SENT_CLASSES = [
-      'neutral', 
-      'calm', 
-      'happy', 
-      'sad', 
-      'angry', 
-      'fearful', 
-      'disgust', 
-      'surprised'
-    ]
+st.title('Create real_time transcription from your microphone')
 
-class WhisperClassificationHead(torch.nn.Module):
-    """Head for classification tasks."""
+start, stop = st.columns(2)    
 
-    def __init__(
-        self,
-        input_dim: int,
-        inner_dim: int,
-        num_classes: int,
-        pooler_dropout: float,
-    ):
-        super().__init__()
-        self.dense = torch.nn.Linear(input_dim, inner_dim)
-        self.dropout = torch.nn.Dropout(p=pooler_dropout)
-        self.out_proj = torch.nn.Linear(inner_dim, num_classes)
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.dense(hidden_states)
-        hidden_states = torch.tanh(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.out_proj(hidden_states)
-        return hidden_states
-
-class WhisperForSentimentAnalysis(torch.nn.Module):
-    def __init__(
-        self, 
-        whisper_model: str,
-        num_classes: int,
-        classifier_dropout: float,
-        ):
-        super().__init__()
-
-        self.model = WhisperModel(WhisperConfig.from_pretrained(whisper_model))
-
-        self.num_classes = num_classes
-        self.classifier_dropout = classifier_dropout
-        self.classification_head = WhisperClassificationHead(
-            self.model.config.d_model,
-            self.model.config.d_model,
-            self.num_classes,
-            self.classifier_dropout,
-        )
-
-    def forward(self,
-        input_features: Optional[torch.LongTensor] = None,
-        decoder_input_ids: Optional[torch.LongTensor] = None,
-        decoder_attention_mask: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        decoder_head_mask: Optional[torch.Tensor] = None,
-        cross_attn_head_mask: Optional[torch.Tensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-        decoder_inputs_embeds: Optional[Tuple[torch.FloatTensor]] = None,
-        labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        ):
-        
-        return_dict = return_dict if return_dict is not None else self.model.config.use_return_dict
-
-        if labels is not None:
-            use_cache = False
-
-        outputs = self.model(
-            input_features,
-            decoder_input_ids=decoder_input_ids,
-            encoder_outputs=encoder_outputs,
-            decoder_attention_mask=decoder_attention_mask,
-            head_mask=head_mask,
-            decoder_head_mask=decoder_head_mask,
-            cross_attn_head_mask=cross_attn_head_mask,
-            past_key_values=past_key_values,
-            decoder_inputs_embeds=decoder_inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        hidden_states = outputs[0]
-        speech_representation = hidden_states[:, -1, :]
-        logits = self.classification_head(speech_representation)
-        return logits
-
-def get_split_audio(processor, file_path, resampling_rate=16000, split_length=15):
-    # retrieve audio file and load it
-    data, sr = librosa.load(file_path)
+def stop_listening():
+    st.session_state['run'] = False
     
-    #get audio file in numpy array and sr as original sampling rate
-    buffer = split_length * sr
-    samples_total = len(data)
-    samples_wrote = 0
-    counter = 1
 
-    while samples_wrote < samples_total:
-        #check if the buffer is not exceeding total samples 
-        if buffer > (samples_total - samples_wrote):
-            buffer = samples_total - samples_wrote
-        block = data[samples_wrote : (samples_wrote + buffer)]
-        if resampling_rate is not None:
-            block = librosa.resample(block, orig_sr=sr, target_sr=resampling_rate)
+def start_listening():
+    st.session_state['run'] = True
 
-        #create input split_length second segment
-        input_features = processor(block, return_tensors="pt", sampling_rate=resampling_rate).input_features
-        if counter == 1:
-            all_input_features = input_features
-        else:
-            all_input_features = torch.cat((all_input_features, input_features), 0)
-        counter += 1
-        samples_wrote += buffer
-    
-    return all_input_features
 
-def run_sentiment(model, all_input_features, batch_size = 8):
-    all_probabilities = []
+start.button('Start Listening', on_click= start_listening)
 
-    for i in range(math.ceil(all_input_features.shape[0]/batch_size)):
-        # Generate logits
-        decoder_input_ids = torch.tensor(all_input_features[i*batch_size:(i+1)*batch_size,:,:].shape[0] * [[1]]) * model.model.config.eos_token_id
-        logits = model(all_input_features[i*batch_size:(i+1)*batch_size,:,:], decoder_input_ids=decoder_input_ids)
 
-        # take softmax
-        softmax = torch.nn.Softmax(dim=-1)
-        probs = softmax(logits)
-        probs = probs.detach().cpu().numpy()
-        all_probabilities.extend(probs)
-    
-    return all_probabilities
+stop.button('Stop Listening', on_click= stop_listening)
 
-# Transcribe text
-# @st.cache(persist=True, max_entries=3, ttl=300)
-# @st.experimental_singleton 
-def transcribe(file_path, model_option):
-    if not os.path.exists(file_path):
-        raise Exception("Audio path does not exists.")
-    # load transcription model
-    model = whisper.load_model(model_option)
-    # generate transcript
-    transcript = model.transcribe(file_path)
 
-    return transcript
+endpoint_url = "wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000"
 
-# Sentiment Analysis
-def sentiment_analysis(file_path, sentiment_model_url, emotion_labels, threshold=0.8, batch_size=8):
-    # load model and processor
-    whisper_model = "openai/whisper-tiny.en"
-    
-    num_classes = len(emotion_labels)
+async def send_receive():
 
-    feature_extractor = WhisperFeatureExtractor.from_pretrained(whisper_model)
-    model = WhisperForSentimentAnalysis(whisper_model=whisper_model, 
-                                        num_classes=num_classes, 
-                                        classifier_dropout=0.1)
-    state_dict = torch.hub.load_state_dict_from_url(sentiment_model_url, map_location=torch.device('cpu'))
-    model.load_state_dict(state_dict)
-    
-    all_input_features = get_split_audio(feature_extractor, file_path, resampling_rate=16000, split_length=15)
-    all_probabilities = run_sentiment(model, all_input_features, batch_size=8)
+    print(f'Connecting websocket to url ${endpoint_url}')
 
-    return all_probabilities
+    async with websockets.connect(
+        endpoint_url,
+        extra_headers=(("Authorization", st.secrets.key),),
+        ping_interval=5,
+        ping_timeout=20
+    ) as _ws:
 
-def main():
-    #Main Body    
-    st.header('Call Centre Audio Analytics')
-    st.write('In this application we leverage deep learning models to process and analyse human speech.')
+        r = await asyncio.sleep(0.1)
+        print("Receiving SessionBegins ...")
 
-    # if st.button('Record audio'):
-    #     with st.spinner(f'Recording for {DURATION} seconds...'):
-    #         sound.record()
-    #     st.success("Recording completed")
-    
-    
-    # Server settings
-    audio_lenght = st.slider('Select recording time (s):', 0.0, 30.0, 3.0)
-    if st.button('Record audio'):
-        with st.spinner(f'Recording...'):
-            audio = pyaudio.PyAudio()
-            audio_format = pyaudio.paInt16
+        session_begins = await _ws.recv()
+        print(session_begins)
+        print("Sending messages ...")
 
-            webrtc_ctx = webrtc_streamer(
-                    key="speech-to-text",
-                    mode=WebRtcMode.SENDONLY,
-                    audio_receiver_size=CHUNK_SIZE,
-                    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-                    media_stream_constraints={"video": False, "audio": True},
-                )
+        async def send():
+            while st.session_state['run']:
+                try:
+                    audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+                    data = stream.read(Frames_per_buffer)
+                    data = base64.b64encode(data).decode("utf-8")
+                    json_data = json.dumps({"audio_data":str(data)})
+                    r = await _ws.send(json_data)
 
-            status_indicator = st.empty()
+                except websockets.exceptions.ConnectionClosedError as e:
+                    print(e)
+                    assert e.code == 4008
+                    break
 
-            if not webrtc_ctx.state.playing:
-                return
+                except Exception as e:
+                    assert False, "Not a websocket 4008 error"
 
-            status_indicator.write("Loading...")
-            stream = None
+                r = await asyncio.sleep(0.01)
 
-            if webrtc_ctx.audio_receiver:
-                # try:
-                #     audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
-                # except queue.Empty:
-                #     time.sleep(0.1)
-                #     status_indicator.write("No frame arrived.")
-                #     # continue
-                audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+            return True
 
-                status_indicator.write("Running. Say something!")
-                
-                # starts recording
-                stream = audio.open(
-                    format=audio_format,
-                    channels=MAX_INPUT_CHANNELS,
-                    rate=DEFAULT_SAMPLE_RATE,
-                    input=True,
-                    frames_per_buffer=CHUNK_SIZE
-                )
 
-                frames = []
-                for i in range(0, int(DEFAULT_SAMPLE_RATE / CHUNK_SIZE * audio_lenght)):
-                    data = stream.read(CHUNK_SIZE)
-                    frames.append(data) 
-                # stop recording
-                stream.stop_stream()
-                stream.close()
-                audio.terminate()
-                
-                # save recording
-                waveFile = wave.open(WAVE_OUTPUT_FILE, 'wb')
-                waveFile.setnchannels(MAX_INPUT_CHANNELS)
-                waveFile.setsampwidth(audio.get_sample_size(audio_format))
-                waveFile.setframerate(DEFAULT_SAMPLE_RATE)
-                waveFile.writeframes(b''.join(frames))
-                waveFile.close()
+        async def receive():
+            while st.session_state['run']:
+                try:
+                    result_str = await _ws.recv()
+                    if json.loads(result_str)['message_type'] == 'FinalTranscript':
+                        print(json.loads(result_str)['text'])
+                        st.markdown(json.loads(result_str)['text'])
 
-            else:
-                status_indicator.write("AudioReciver is not set. Abort.")
-                # break
-        st.success("Recording completed")
+                except websockets.exceptions.ConnectionClosedError as e:
+                    print(e)
+                    assert e.code == 4008
+                    break
 
-    if os.path.exists(WAVE_OUTPUT_FILE):
-        st.audio(WAVE_OUTPUT_FILE)
+                except Exception as e:
+                    assert False, "Not a websocket 4008 error"
 
-    # Tasks
-    col1, col2 = st.columns(2)
+        send_result, receive_result = await asyncio.gather(send(), receive())
 
-    with col1:
-        gen_models = [
-                "tiny",
-                "base",
-                "small",
-                "medium",
-                "large",
-            ]
-        model_option = st.selectbox(
-            'Select a transcription engine:',
-            tuple(gen_models),
-        )
-        model_option = str(model_option)
-        if st.button('Run Transcript Generation'): 
-            try:
-                with st.spinner(f'Generating transcript...'):
-                    transcript = transcribe(WAVE_OUTPUT_FILE, model_option=model_option)
-                st.subheader('Audio transcript:')
-                for s in transcript['segments']:
-                    st.write(s['text'])
-            except:
-                st.error("No audio has been recorded.")
-
-    with col2:
-        threshold = st.slider('Select a confidence threshold:', 0.0, 100.0, 80.0)
-
-        if st.button('Run Sentiment Analysis'):
-            try:
-                with st.spinner(f'Analysing audio...'):
-                    all_probabilities = sentiment_analysis(file_path=WAVE_OUTPUT_FILE, 
-                                                           sentiment_model_url=SENTIMENT_MODEL_URL, 
-                                                           emotion_labels=SENT_CLASSES,
-                                                           threshold=float(threshold) / 100.0)
-                st.subheader("Sentiment(s) found:")
-                for i in range(len(all_probabilities)):
-                    emotion_idx = np.argmax(all_probabilities[i])
-                    emotion_pred = SENT_CLASSES[emotion_idx]
-                    if all_probabilities[i][emotion_idx] > threshold:
-                        st.write("Emotion detected:", str(emotion_pred), 
-                              "with probability", "%d %%" % (all_probabilities[i][emotion_idx] * 100))
-            except:
-                st.error("No audio has been recorded.")
-
-if __name__ == '__main__':
-    main()
+asyncio.run(send_receive())     
