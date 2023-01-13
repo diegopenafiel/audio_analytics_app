@@ -282,8 +282,9 @@ def main():
                     if all_probabilities[i][emotion_idx] > (threshold/100):
                         st.write("Emotion detected:", str(emotion_pred), 
                               "with probability", "%d %%" % (all_probabilities[i][emotion_idx] * 100))
-            except:
-                st.error("No audio has been recorded.")
+            except Exception as e:
+                st.error(e)
+                # st.error("No audio has been recorded.")
 
 if __name__ == '__main__':
     main()
