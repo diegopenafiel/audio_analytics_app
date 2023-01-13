@@ -1,4 +1,6 @@
 libasound-dev
-portaudio19-dev
-ffmpeg
-python3-pyaudio
+portaudio19-dev 
+libportaudio2 
+libportaudiocpp0
+ffmpeg 
+libav-tools
