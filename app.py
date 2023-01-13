@@ -1,12 +1,14 @@
 import sys, os
 
 import streamlit as st
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
 import pandas as pd
 import numpy as np
 import time 
 import json
 import logging
-from src.sound import sound
+# from src.sound import sound
+import pyaudio, wave
 from settings import (
     DURATION, DEFAULT_SAMPLE_RATE, MAX_INPUT_CHANNELS,
     WAVE_OUTPUT_FILE, INPUT_DEVICE, CHUNK_SIZE,
@@ -203,11 +205,78 @@ def main():
     st.header('Call Centre Audio Analytics')
     st.write('In this application we leverage deep learning models to process and analyse human speech.')
 
+    # if st.button('Record audio'):
+    #     with st.spinner(f'Recording for {DURATION} seconds...'):
+    #         sound.record()
+    #     st.success("Recording completed")
+    
+    
+    # Server settings
+    audio_lenght = st.slider('Select recording time (s):', 0.0, 30.0, 3.0)
     if st.button('Record audio'):
-        with st.spinner(f'Recording for {DURATION} seconds...'):
-            sound.record()
+        with st.spinner(f'Recording...'):
+            audio = pyaudio.PyAudio()
+            audio_format = pyaudio.paInt16
+
+            webrtc_ctx = webrtc_streamer(
+                    key="speech-to-text",
+                    mode=WebRtcMode.SENDONLY,
+                    audio_receiver_size=CHUNK_SIZE,
+                    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+                    media_stream_constraints={"video": False, "audio": True},
+                )
+
+            status_indicator = st.empty()
+
+            if not webrtc_ctx.state.playing:
+                return
+
+            status_indicator.write("Loading...")
+            stream = None
+
+            if webrtc_ctx.audio_receiver:
+                # try:
+                #     audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+                # except queue.Empty:
+                #     time.sleep(0.1)
+                #     status_indicator.write("No frame arrived.")
+                #     # continue
+                audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+
+                status_indicator.write("Running. Say something!")
+                
+                # starts recording
+                stream = audio.open(
+                    format=audio_format,
+                    channels=MAX_INPUT_CHANNELS,
+                    rate=DEFAULT_SAMPLE_RATE,
+                    input=True,
+                    frames_per_buffer=CHUNK_SIZE
+                )
+
+                frames = []
+                for i in range(0, int(DEFAULT_SAMPLE_RATE / CHUNK_SIZE * audio_lenght)):
+                    data = stream.read(CHUNK_SIZE)
+                    frames.append(data) 
+                # stop recording
+                stream.stop_stream()
+                stream.close()
+                audio.terminate()
+                
+                # save recording
+                waveFile = wave.open(WAVE_OUTPUT_FILE, 'wb')
+                waveFile.setnchannels(MAX_INPUT_CHANNELS)
+                waveFile.setsampwidth(audio.get_sample_size(audio_format))
+                waveFile.setframerate(DEFAULT_SAMPLE_RATE)
+                waveFile.writeframes(b''.join(frames))
+                waveFile.close()
+
+            else:
+                status_indicator.write("AudioReciver is not set. Abort.")
+                # break
         st.success("Recording completed")
 
+    if os.path.exists(WAVE_OUTPUT_FILE):
         st.audio(WAVE_OUTPUT_FILE)
 
     # Tasks
