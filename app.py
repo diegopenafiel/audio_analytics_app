@@ -10,8 +10,9 @@ import logging
 from settings import (
     DURATION, DEFAULT_SAMPLE_RATE, MAX_INPUT_CHANNELS,
     WAVE_OUTPUT_FILE, INPUT_DEVICE, CHUNK_SIZE,
-    RECORDING_DIR, SENTIMENT_MODEL_URL
+    RECORDING_DIR, SENTIMENT_MODEL_URL, MODEL_PATH, MODEL_DIR
 )
+from pathlib import Path
 
 import math
 import librosa
@@ -180,7 +181,7 @@ def transcribe(file_path, model_option):
     return transcript
 
 # Sentiment Analysis
-def sentiment_analysis(file_path, sentiment_model_url, emotion_labels, threshold=0.8, batch_size=8):
+def sentiment_analysis(file_path, sentiment_model_path, emotion_labels, threshold=0.8, batch_size=8):
     # load model and processor
     whisper_model = "openai/whisper-tiny.en"
     
@@ -190,13 +191,58 @@ def sentiment_analysis(file_path, sentiment_model_url, emotion_labels, threshold
     model = WhisperForSentimentAnalysis(whisper_model=whisper_model, 
                                         num_classes=num_classes, 
                                         classifier_dropout=0.1)
-    state_dict = torch.hub.load_state_dict_from_url(sentiment_model_url, map_location=torch.device('cpu'))
+    state_dict = torch.load(sentiment_model_path, map_location=torch.device('cpu'))
     model.load_state_dict(state_dict)
     
     all_input_features = get_split_audio(feature_extractor, file_path, resampling_rate=16000, split_length=15)
     all_probabilities = run_sentiment(model, all_input_features, batch_size=8)
 
     return all_probabilities
+
+# This code is based on https://github.com/streamlit/demo-self-driving/blob/230245391f2dda0cb464008195a470751c01770b/streamlit_app.py#L48  # noqa: E501
+def download_file(url, download_to: Path, expected_size=None):
+    # Don't download the file twice.
+    # (If possible, verify the download using the file length.)
+    if download_to.exists():
+        if expected_size:
+            if download_to.stat().st_size == expected_size:
+                return
+        else:
+            st.info(f"{url} is already downloaded.")
+            if not st.button("Download again?"):
+                return
+
+    download_to.parent.mkdir(parents=True, exist_ok=True)
+
+    # These are handles to two visual elements to animate.
+    weights_warning, progress_bar = None, None
+    try:
+        weights_warning = st.warning("Downloading %s..." % url)
+        progress_bar = st.progress(0)
+        with open(download_to, "wb") as output_file:
+            with urllib.request.urlopen(url) as response:
+                length = int(response.info()["Content-Length"])
+                counter = 0.0
+                MEGABYTES = 2.0 ** 20.0
+                while True:
+                    data = response.read(8192)
+                    if not data:
+                        break
+                    counter += len(data)
+                    output_file.write(data)
+
+                    # We perform animation by overwriting the elements.
+                    weights_warning.warning(
+                        "Downloading %s... (%6.2f/%6.2f MB)"
+                        % (url, counter / MEGABYTES, length / MEGABYTES)
+                    )
+                    progress_bar.progress(min(counter / length, 1.0))
+    # Finally, we remove these visual elements by calling .empty().
+    finally:
+        if weights_warning is not None:
+            weights_warning.empty()
+        if progress_bar is not None:
+            progress_bar.empty()
 
 def sst(path_to_wav):
     def recorder_factory():
@@ -233,6 +279,8 @@ def main():
     #Main Body    
     st.header('Call Centre Audio Analytics')
     st.write('In this application we leverage deep learning models to process and analyse human speech.')
+    
+    download_file(SENTIMENT_MODEL_URL, Path(MODEL_DIR), expected_size=151710983)
     
     # audio recording
     sst(path_to_wav=WAVE_OUTPUT_FILE)
@@ -272,7 +320,7 @@ def main():
             try:
                 with st.spinner(f'Analysing audio...'):
                     all_probabilities = sentiment_analysis(file_path=WAVE_OUTPUT_FILE, 
-                                                           sentiment_model_url=SENTIMENT_MODEL_URL, 
+                                                           sentiment_model_path=MODEL_PATH, 
                                                            emotion_labels=SENT_CLASSES,
                                                            threshold=float(threshold) / 100.0)
                 st.subheader("Sentiment(s) found:")
