@@ -12,6 +12,7 @@ from settings import (
     WAVE_OUTPUT_FILE, INPUT_DEVICE, CHUNK_SIZE,
     RECORDING_DIR, SENTIMENT_MODEL_URL, MODEL_PATH, MODEL_DIR
 )
+import queue
 import urllib.request
 from pathlib import Path
 
