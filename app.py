@@ -281,7 +281,7 @@ def main():
     st.header('Call Centre Audio Analytics')
     st.write('In this application we leverage deep learning models to process and analyse human speech.')
     
-    download_file(SENTIMENT_MODEL_URL, Path(MODEL_DIR), expected_size=151710983)
+    download_file(SENTIMENT_MODEL_URL, Path(MODEL_PATH), expected_size=151710983)
     
     # audio recording
     sst(path_to_wav=WAVE_OUTPUT_FILE)
