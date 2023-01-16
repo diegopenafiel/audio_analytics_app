@@ -283,9 +283,9 @@ def main():
     head1, _, _, head2 = st.columns(4)
     
     with head1:
-        st.image(os.path.join(IMAGE_DIR, "ADP.png"), width=300)
+        st.image(os.path.join(IMAGE_DIR, "ADP.png"), width=200)
     with head2:
-        st.image(os.path.join(IMAGE_DIR, "MBZUAI.png"), width=300)
+        st.image(os.path.join(IMAGE_DIR, "MBZUAI.png"), width=200)
     
     st.header('Call Centre Audio Analytics')
     st.write('In this application we leverage deep learning models to process and analyse human speech.')
