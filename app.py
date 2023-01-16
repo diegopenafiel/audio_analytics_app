@@ -280,7 +280,7 @@ def sst(path_to_wav):
 
 def main():
     #Main Body    
-    head1, head2 = st.columns(2)
+    head1, _, _, head2 = st.columns(4)
     
     with head1:
         st.image(os.path.join(IMAGE_DIR, "ADP.png"), width=10)
