@@ -10,7 +10,8 @@ import logging
 from settings import (
     DURATION, DEFAULT_SAMPLE_RATE, MAX_INPUT_CHANNELS,
     WAVE_OUTPUT_FILE, INPUT_DEVICE, CHUNK_SIZE,
-    RECORDING_DIR, SENTIMENT_MODEL_URL, MODEL_PATH, MODEL_DIR
+    RECORDING_DIR, IMAGE_DIR,
+    SENTIMENT_MODEL_URL, MODEL_PATH, MODEL_DIR
 )
 import queue
 import urllib.request
@@ -279,6 +280,13 @@ def sst(path_to_wav):
 
 def main():
     #Main Body    
+    head1, head2 = st.columns(2)
+    
+    with head1:
+        st.image(os.path.join(IMAGE_DIR, "MBZUAI.png"))
+    with head2:
+        st.image(os.path.join(IMAGE_DIR, "ADP.png"))
+    
     st.header('Call Centre Audio Analytics')
     st.write('In this application we leverage deep learning models to process and analyse human speech.')
     
